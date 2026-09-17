@@ -1,90 +1,72 @@
-name: Deploy Next.js site to Pages
+name: CI/CD - Lint, Test, Build e Deploy
 
 on:
-  # Roda em pushes e pull requests para a branch principal
   push:
     branches: ["main"]
   pull_request:
     branches: ["main"]
-
-  # Permite rodar esse workflow manualmente pela aba Actions
   workflow_dispatch:
 
-# Define as permissões do GITHUB_TOKEN para permitir o deploy no GitHub Pages
+# Permissões necessárias para o GITHUB_TOKEN publicar no GitHub Pages
+# (o token em si é gerado automaticamente pelo GitHub, não precisa ser
+# cadastrado como secret).
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Permite só um deploy simultâneo, pulando execuções enfileiradas entre a que já
-# está rodando e a mais recente. Não cancela execuções em andamento, já que
-# queremos deixar esses deploys de produção terminarem.
+# Evita dois deploys rodando ao mesmo tempo.
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
-  # Job de build, lint e testes
-  build:
+  # ----- Integração Contínua -----
+  ci:
+    name: Lint, Test e Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout do código
         uses: actions/checkout@v4
-      - name: Detect package manager
-        id: detect-package-manager
-        run: |
-          if [ -f "${{ github.workspace }}/yarn.lock" ]; then
-            echo "manager=yarn" >> $GITHUB_OUTPUT
-            echo "command=install" >> $GITHUB_OUTPUT
-            echo "runner=yarn" >> $GITHUB_OUTPUT
-            exit 0
-          elif [ -f "${{ github.workspace }}/package.json" ]; then
-            echo "manager=npm" >> $GITHUB_OUTPUT
-            echo "command=ci" >> $GITHUB_OUTPUT
-            echo "runner=npx --no-install" >> $GITHUB_OUTPUT
-            exit 0
-          else
-            echo "Unable to determine package manager"
-            exit 1
-          fi
-      - name: Setup Node
+
+      - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: ${{ steps.detect-package-manager.outputs.manager }}
-      - name: Setup Pages
+          cache: "npm"
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Rodar lint
+        run: npm run lint
+
+      - name: Rodar testes
+        run: npm run test
+
+      - name: Rodar build
+        run: npm run build
+
+      - name: Configurar GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v5
-      - name: Restore cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            .next/cache
-          # Gera um cache novo sempre que os pacotes ou os arquivos de código mudam.
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}-${{ hashFiles('**.[jt]s', '**.[jt]sx') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-${{ hashFiles('**/package-lock.json', '**/yarn.lock') }}-
-      - name: Install dependencies
-        run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
-      - name: Lint
-        run: ${{ steps.detect-package-manager.outputs.runner }} next lint
-      - name: Run tests
-        run: ${{ steps.detect-package-manager.outputs.manager }} test
-      - name: Build
-        run: ${{ steps.detect-package-manager.outputs.runner }} next build
-      - name: Upload artifact
+
+      - name: Enviar artefato de build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./out
 
-  # Job de deploy no GitHub Pages
+  # ----- Entrega Contínua -----
   deploy:
-    needs: build
+    name: Deploy no GitHub Pages
+    needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy no GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
